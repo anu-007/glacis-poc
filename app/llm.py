@@ -99,6 +99,160 @@ Return ONLY the JSON object.
 
 
 # ---------------------------------------------------------------------------
+# Few-shot examples
+#
+# Injected as alternating user/assistant turns before the real payload.
+# Using actual chat turns (rather than examples inside the system prompt)
+# is more effective for OpenAI chat models: it mirrors the format the model
+# was fine-tuned on and gives concrete input→output demonstrations.
+#
+# Scenarios covered:
+#   1. SHIPMENT  — standard fields; extra/unknown fields must be dropped
+#   2. SHIPMENT  — vendor snake_case naming + status synonym ("in_transit")
+#   3. INVOICE   — standard fields; unrelated fields must be dropped
+#   4. INVOICE   — alt field names, amount as string, lowercase currency code
+#   5. UNCLASSIFIED — shipment-like but status cannot be confidently mapped
+#   6. UNCLASSIFIED — completely unknown event category
+# ---------------------------------------------------------------------------
+
+FEW_SHOT_MESSAGES: list[dict[str, str]] = [
+    # ── 1. SHIPMENT: standard fields, extra fields dropped ──────────────────
+    {
+        "role": "user",
+        "content": json.dumps({
+            "vendorId": "vendor-42",
+            "trackingNumber": "TRK-001",
+            "status": "TRANSIT",
+            "timestamp": "2024-06-01T12:00:00Z",
+            "internalRef": "ref-abc",       # extra — must be dropped
+            "warehouse": "NYC-01",           # extra — must be dropped
+        }),
+    },
+    {
+        "role": "assistant",
+        "content": json.dumps({
+            "type": "SHIPMENT",
+            "vendorId": "vendor-42",
+            "trackingNumber": "TRK-001",
+            "status": "TRANSIT",
+            "timestamp": "2024-06-01T12:00:00Z",
+        }),
+    },
+    # ── 2. SHIPMENT: snake_case vendor fields + status synonym ───────────────
+    {
+        "role": "user",
+        "content": json.dumps({
+            "vendor_id": "acme-corp",        # maps to vendorId
+            "tracking_number": "SHIP-9999",  # maps to trackingNumber
+            "ship_status": "in_transit",     # synonym → TRANSIT
+            "shipped_at": "2024-03-15T08:30:00Z",  # maps to timestamp
+            "origin_warehouse": "London",    # extra — must be dropped
+        }),
+    },
+    {
+        "role": "assistant",
+        "content": json.dumps({
+            "type": "SHIPMENT",
+            "vendorId": "acme-corp",
+            "trackingNumber": "SHIP-9999",
+            "status": "TRANSIT",
+            "timestamp": "2024-03-15T08:30:00Z",
+        }),
+    },
+    # ── 3. INVOICE: standard fields, unrelated fields dropped ────────────────
+    {
+        "role": "user",
+        "content": json.dumps({
+            "vendorId": "vendor-99",
+            "invoiceId": "INV-2024-001",
+            "amount": 1250.00,
+            "currency": "USD",
+            "dueDate": "2024-07-01",         # extra — must be dropped
+            "notes": "Net 30",               # extra — must be dropped
+        }),
+    },
+    {
+        "role": "assistant",
+        "content": json.dumps({
+            "type": "INVOICE",
+            "vendorId": "vendor-99",
+            "invoiceId": "INV-2024-001",
+            "amount": 1250.0,
+            "currency": "USD",
+        }),
+    },
+    # ── 4. INVOICE: alt field names, amount as string, lowercase currency ────
+    {
+        "role": "user",
+        "content": json.dumps({
+            "vendor_id": "beta-ltd",         # maps to vendorId
+            "invoice_number": "BETA-456",    # maps to invoiceId
+            "total": "899.50",               # string → must be cast to float
+            "currency_code": "eur",          # maps to currency, uppercased
+            "tax": 89.95,                    # extra — must be dropped
+            "due_date": "2024-08-01",        # extra — must be dropped
+        }),
+    },
+    {
+        "role": "assistant",
+        "content": json.dumps({
+            "type": "INVOICE",
+            "vendorId": "beta-ltd",
+            "invoiceId": "BETA-456",
+            "amount": 899.50,
+            "currency": "EUR",
+        }),
+    },
+    # ── 5. UNCLASSIFIED: status present but cannot be confidently mapped ─────
+    {
+        "role": "user",
+        "content": json.dumps({
+            "vendorId": "vendor-X",
+            "trackingNumber": "TRK-555",
+            "status": "pending_pickup",      # not TRANSIT/DELIVERED/EXCEPTION
+            "eta": "2024-06-10",
+        }),
+    },
+    {
+        "role": "assistant",
+        "content": json.dumps({
+            "type": "UNCLASSIFIED",
+            "raw": {
+                "vendorId": "vendor-X",
+                "trackingNumber": "TRK-555",
+                "status": "pending_pickup",
+                "eta": "2024-06-10",
+            },
+        }),
+    },
+    # ── 6. UNCLASSIFIED: completely unknown event category ───────────────────
+    {
+        "role": "user",
+        "content": json.dumps({
+            "eventType": "order_created",
+            "orderId": "ORD-7890",
+            "customerId": "CUST-42",
+            "total": 320.00,
+            "items": [{"sku": "SKU-1", "qty": 2}],
+        }),
+    },
+    {
+        "role": "assistant",
+        "content": json.dumps({
+            "type": "UNCLASSIFIED",
+            "raw": {
+                "eventType": "order_created",
+                "orderId": "ORD-7890",
+                "customerId": "CUST-42",
+                "total": 320.00,
+                "items": [{"sku": "SKU-1", "qty": 2}],
+            },
+        }),
+    },
+]
+
+
+# ---------------------------------------------------------------------------
 # OpenAI call (real)
 # ---------------------------------------------------------------------------
 
@@ -119,6 +273,7 @@ def _call_openai(payload: dict[str, Any]) -> dict[str, Any]:
                 model=settings.openai_model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
+                    *FEW_SHOT_MESSAGES,
                     {"role": "user", "content": json.dumps(payload)},
                 ],
                 response_format={"type": "json_object"},
