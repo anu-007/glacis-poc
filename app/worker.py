@@ -140,7 +140,7 @@ if __name__ == "__main__":
 
     from app.redis_client import DLQ_QUEUE_NAME, QUEUE_NAME, get_redis
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, force=True)
     conn = get_redis()
     worker = Worker([QUEUE_NAME, DLQ_QUEUE_NAME], connection=conn)
     logger.info("Starting RQ worker on queues: %s, %s", QUEUE_NAME, DLQ_QUEUE_NAME)
